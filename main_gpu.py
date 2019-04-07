@@ -35,7 +35,7 @@ parser.add_argument( '--seed', type=int, default=0 )
 parser.add_argument( '--protein-len', type=int, default=1200 )
 parser.add_argument( '--compound-len', type=int, default=100 )
 parser.add_argument( '--embedding-dim', type=int, default=128 )
-parser.add_argument( '--fasion', type=str, default="single", choices=['single', 'pair'] )
+parser.add_argument( '--fashion', type=str, default='single', choices=['single', 'pair'] )
 
 class Env():
     def __init__(self, args):
@@ -53,11 +53,12 @@ class Env():
         self.load_dataset()
 
         model = models.AffinityPredictNet( args.protein_len, args.compound_len, args.embedding_dim )
+        model = torch.nn.DataParallel( model ).cuda()
         self.model = model
 
         logger.info( 'Dims: {}'.format( sum([m.data.nelement() if m.requires_grad else 0
             for m in model.parameters()] ) ) )
-
+        
         self.optimizer = optim.Adam( model.parameters(), lr=args.lr )
 
         self.epoch = 0
@@ -79,7 +80,7 @@ class Env():
         self.trainLoader = data.DataLoader( trainDataset,
             batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True )
         self.testLoader = data.DataLoader( testDataset,
-            batch_size=args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=True )
+            batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True )
 
         self.args = args
         self.save( self.best_acc )
@@ -117,13 +118,15 @@ class Env():
             self.optimizer.zero_grad()
 
             proteins, compounds, affinityScores = batch
+            #print( (proteins).type(torch.FloatTensor).mean(), (compounds).type(torch.FloatTensor).mean(), affinityScores.mean() )
+            #input()
 
-            pred = self.model( proteins, compounds )
+            pred = self.model( proteins.cuda(), compounds.cuda() )
 
-            loss = self.criterion( pred, affinityScores )
+            loss = self.criterion( pred, affinityScores.cuda() )
 
-            losses.update( loss.item(), proteins.size(0) )
             loss.backward()
+            losses.update( loss.cpu().item(), proteins.size(0) )
             if np.isnan( loss.item() ):
                 raise Exception("Training model diverges.")
             self.optimizer.step()
@@ -149,13 +152,16 @@ class Env():
         with torch.no_grad():
             for i, batch in tqdm.tqdm(enumerate(self.testLoader)):
                 proteins, compounds, affinityScores = batch
+                #print( (proteins).type(torch.FloatTensor).mean(), (compounds).type(torch.FloatTensor).mean(), affinityScores.mean() )
+                #input()
 
-                pred = self.model( proteins, compounds )
-                loss = self.criterion( pred, affinityScores )
-                MSE.update( loss.item(), proteins.size(0) )
+                pred = self.model( proteins.cuda(), compounds.cuda() )
+                loss = self.criterion( pred, affinityScores.cuda() )
+                #print( pred.cpu().numpy().reshape(-1)[:10], affinityScores.cpu().numpy().reshape(-1)[:10] )
+                MSE.update( loss.cpu().item(), proteins.size(0) )
 
-                globalScores.append( affinityScores )
-                globalPred.append( pred )
+                globalScores.append( affinityScores.cpu() )
+                globalPred.append( pred.cpu() )
 
         globalScores = torch.cat( globalScores, 0 )
         globalPred = torch.cat( globalPred, 0 )
@@ -167,8 +173,8 @@ class Env():
     def load_dataset( self ):
         args = self.args
         if args.dataset in ['davis', 'kiba']:
-            trainDataset = datasets.BindingAffinityDataset( args.dataset, 'train', maxProteinLen = args.protein_len, maxCompoundLen=args.compound_len, fashion = args.fashion )
-            testDataset = datasets.BindingAffinityDataset( args.dataset, 'test', maxProteinLen = args.protein_len, maxCompoundLen=args.compound_len, fashion = args.fashion )
+            trainDataset = datasets.BindingAffinityDataset( args.dataset, 'train', maxProteinLen = args.protein_len, maxCompoundLen=args.compound_len , fashion=args.fashion )
+            testDataset = datasets.BindingAffinityDataset( args.dataset, 'test', maxProteinLen = args.protein_len, maxCompoundLen=args.compound_len, fashion=args.fashion )
         else:
             raise NotImplementedError('Dataset has not been implemented')
         self.trainDataset, self.testDataset = trainDataset, testDataset

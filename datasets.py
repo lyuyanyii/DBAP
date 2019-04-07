@@ -38,7 +38,7 @@ class BindingAffinityDataset( data.Dataset ):
             compoundLabel[i] = self.charCompSet[ch]
         return compoundLabel
 
-    def __init__( self, dataset, mode, maxProteinLen = 1200, maxCompoundLen=100 ):
+    def __init__( self, dataset, mode, maxProteinLen = 1200, maxCompoundLen=100, fashion="single" ):
         super().__init__()
 
         self.maxProteinLen = maxProteinLen
@@ -58,36 +58,41 @@ class BindingAffinityDataset( data.Dataset ):
         lenProteins = len(proteins)
         lenCompounds = len(compounds)
 
-        if mode == "train":
-            indexProteins = indexProteins[:int(lenProteins*0.8)]
-            indexCompounds = indexCompounds[:int(lenCompounds*0.8)]
-        elif mode == "test":
-            indexProteins = indexProteins[int(lenProteins*0.8):]
-            indexCompounds = indexCompounds[int(lenCompounds*0.8):]
-
-        """
-        proteins = proteins[ indexProteins ]
-        compounds = compounds[ indexCompounds ]
-        """
+        if fashion == 'single':
+            if mode == "train":
+                indexProteins = indexProteins[:int(lenProteins*0.8)]
+                indexCompounds = indexCompounds[:int(lenCompounds*0.8)]
+            elif mode == "test":
+                if dataset == "davis":
+                    ratio = 0.8
+                else:
+                    ratio = 0.9
+                indexProteins = indexProteins[int(lenProteins*ratio):]
+                indexCompounds = indexCompounds[int(lenCompounds*ratio):]
 
         affinityPairs = []
         affinityFile = open( os.path.join(data_dir, "{}_binding_affinity.txt".format(dataset)), "r")
-        for proteinID, line in enumerate(affinityFile.readlines()):
-            if proteinID not in indexProteins:
+        for compoundID, line in enumerate(affinityFile.readlines()):
+            if compoundID not in indexCompounds:
                 continue
-            for compoundID, score in enumerate(line.split(" ")):
-                if compoundID not in indexCompounds or score == "nan":
+            for proteinID, score in enumerate(line.split()):
+                if proteinID not in indexProteins or score == "nan":
                     continue
                 score = np.float32(score)
                 if dataset == "davis":
                     score = -(np.log10(score/1e9))
-                score /= 10
                 affinityPairs.append( (proteinID, compoundID, score) )
 
         self.proteins = proteins
         self.compounds = compounds
         self.affinityPairs = affinityPairs
-        self.len = len(affinityPairs)
+        if fashion == "pair":
+            np.random.shuffle( self.affinityPairs )
+            if mode =="train":
+                self.affinityPairs = self.affinityPairs[ :int(len(self.affinityPairs)-1200) ]
+            else:
+                self.affinityPairs = self.affinityPairs[ int(len(self.affinityPairs)-1200): ]
+        self.len = len(self.affinityPairs)
 
     def __len__( self ):
         return self.len
@@ -101,4 +106,6 @@ class BindingAffinityDataset( data.Dataset ):
 
 if __name__ == '__main__':
     davisDataset = BindingAffinityDataset( "davis", "train" )
-    print( davisDataset.__get_item__(7) )
+    print( len(davisDataset) )
+    davisDataset = BindingAffinityDataset( "davis", "test" )
+    print( len(davisDataset) )
